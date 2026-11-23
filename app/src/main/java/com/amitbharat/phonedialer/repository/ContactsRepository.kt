@@ -88,27 +88,48 @@ class ContactsRepository(private val context: Context) {
     fun getAllContacts(forceRefresh: Boolean = false): Flow<List<Contact>> = flow {
         val now = System.currentTimeMillis()
         val cached = cachedContacts
-        if (!forceRefresh && cached != null && (now - lastFetchTime < 60_000)) {
+        if (!cached.isNullOrEmpty()) {
             emit(cached)
+            if (!forceRefresh && (now - lastFetchTime < 60_000)) {
+                return@flow
+            }
         } else {
-            val deviceContacts = deduplicateContacts(fetchDeviceContactsDirectly(onlyStarred = false))
-            cachedContacts = deviceContacts
-            lastFetchTime = now
-            emit(deviceContacts)
-
-            // Asynchronously refresh WhatsApp contacts map in background without blocking
+            // Instant load from Room database for 0ms initial UI display
             try {
-                com.amitbharat.phonedialer.utils.WhatsAppHelper.refreshWhatsAppContacts(context)
-            } catch (e: Exception) {}
+                val roomList = contactDao.getAllContactsDirect()
+                if (roomList.isNotEmpty()) {
+                    val roomContacts = deduplicateContacts(roomList.map { it.toModel() })
+                    cachedContacts = roomContacts
+                    emit(roomContacts)
+                }
+            } catch (ignored: Exception) {}
         }
 
-        contactDao.getAllContacts().map { list ->
-            val cur = cachedContacts ?: emptyList()
-            if (list.isNotEmpty()) deduplicateContacts(list.map { it.toModel() }) else cur
-        }.collect {
-            cachedContacts = deduplicateContacts(it)
-            emit(cachedContacts!!)
-        }
+        // Asynchronously fetch fresh device contacts from content provider
+        val deviceContacts = deduplicateContacts(fetchDeviceContactsDirectly(onlyStarred = false))
+        cachedContacts = deviceContacts
+        lastFetchTime = System.currentTimeMillis()
+        emit(deviceContacts)
+
+        // Save fresh contacts to Room in background for next instant 0ms launch
+        try {
+            val entities = deviceContacts.map { c ->
+                ContactEntity(
+                    id = if (c.id > 0) c.id else 0,
+                    name = c.name,
+                    numbersJson = encodeNumbers(c.numbers),
+                    photoUri = c.photoUri,
+                    isFavorite = c.isFavorite
+                )
+            }
+            contactDao.deleteAllContacts()
+            contactDao.insertContacts(entities)
+        } catch (ignored: Exception) {}
+
+        // Asynchronously refresh WhatsApp contacts map in background without blocking
+        try {
+            com.amitbharat.phonedialer.utils.WhatsAppHelper.refreshWhatsAppContacts(context)
+        } catch (e: Exception) {}
     }.flowOn(Dispatchers.IO)
 
     fun getFavoriteContacts(): Flow<List<Contact>> = flow {

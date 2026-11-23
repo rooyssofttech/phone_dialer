@@ -302,4 +302,27 @@ class SmsRepository(private val context: Context) {
         current.add(0, updatedThread)
         _threads.value = current
     }
+
+    suspend fun deleteThread(displayAddress: String) = withContext(Dispatchers.IO) {
+        val norm = normalizeNumber(displayAddress)
+        try {
+            context.contentResolver.delete(
+                Telephony.Sms.CONTENT_URI,
+                "address = ? OR address LIKE ?",
+                arrayOf(displayAddress, "%$norm")
+            )
+            _threads.value = _threads.value.filter { it.displayAddress != displayAddress && it.normalizedNumber != norm }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    suspend fun deleteMessage(messageId: Long) = withContext(Dispatchers.IO) {
+        try {
+            val uri = android.net.Uri.withAppendedPath(Telephony.Sms.CONTENT_URI, messageId.toString())
+            context.contentResolver.delete(uri, null, null)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
 }

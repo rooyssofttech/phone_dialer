@@ -127,7 +127,7 @@ fun MainScreen(
             thread = activeChatThread!!,
             contacts = contacts,
             onBack = { activeChatThread = null },
-            onCallClick = { onCallClick(activeChatThread!!.displayAddress, 0) }
+            onCallClick = { onCallClick(activeChatThread!!.displayAddress, -1) }
         )
     } else if (editingContact != null) {
         com.amitbharat.phonedialer.ui.contacts.AddEditContactScreen(
@@ -148,7 +148,7 @@ fun MainScreen(
             contact = details.contact ?: contacts.find { it.name == details.name || it.numbers.contains(details.number) },
             callLogs = callLogs,
             onBack = { selectedContactDetails = null },
-            onCallClick = { num -> onCallClick(num, 0) },
+            onCallClick = { num -> onCallClick(num, -1) },
             onMessageClick = { num ->
                 val digits = num.replace(Regex("[^0-9]"), "")
                 val norm = if (digits.length >= 10) digits.takeLast(10) else digits
@@ -250,7 +250,7 @@ fun MainScreen(
                     )
                 )
             },
-            contentWindowInsets = WindowInsets(0, 0, 0, 0),
+            contentWindowInsets = ScaffoldDefaults.contentWindowInsets,
             bottomBar = {
                 if (!isSearchActive && !WindowInsets.isImeVisible) {
                     val navItemColors = NavigationBarItemDefaults.colors(
@@ -381,7 +381,7 @@ fun MainScreen(
                     )
                     MainTab.CONTACTS -> ContactsScreen(
                         contacts = contacts,
-                        onCallClick = { num -> onCallClick(num, 0) },
+                        onCallClick = { num -> onCallClick(num, -1) },
                         onMessageClick = { num ->
                             val digits = num.replace(Regex("[^0-9]"), "")
                             val norm = if (digits.length >= 10) digits.takeLast(10) else digits
@@ -407,14 +407,14 @@ fun MainScreen(
                     )
                     MainTab.MESSAGES -> MessagesScreen(
                         contacts = contacts,
-                        onCallClick = { num -> onCallClick(num, 0) },
+                        onCallClick = { num -> onCallClick(num, -1) },
                         onOpenThread = { thread -> activeChatThread = thread },
                         onSearchActive = { isSearchActive = it },
                         scrollToTopTrigger = messagesScrollToTopTrigger
                     )
                     MainTab.FAVORITES -> FavoritesScreen(
                         favorites = favorites,
-                        onCallClick = { num -> onCallClick(num, 0) },
+                        onCallClick = { num -> onCallClick(num, -1) },
                         onMessageClick = { num ->
                             val digits = num.replace(Regex("[^0-9]"), "")
                             val norm = if (digits.length >= 10) digits.takeLast(10) else digits

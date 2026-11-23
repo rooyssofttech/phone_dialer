@@ -21,6 +21,12 @@ data class SimSlotInfo(
     val phoneAccountHandle: PhoneAccountHandle? = null
 )
 
+data class SimDecision(
+    val shouldAsk: Boolean,
+    val selectedSim: SimSlotInfo?,
+    val availableSims: List<SimSlotInfo>
+)
+
 object SimHelper {
 
     @Volatile
@@ -31,6 +37,55 @@ object SimHelper {
     fun invalidateCache() {
         cachedSimCards = null
         lastSimCheckTime = 0L
+    }
+
+    fun getSimDecision(context: Context): SimDecision {
+        val sims = getSimCards(context)
+        if (sims.isEmpty()) {
+            return SimDecision(shouldAsk = false, selectedSim = null, availableSims = emptyList())
+        }
+        if (sims.size == 1) {
+            return SimDecision(shouldAsk = false, selectedSim = sims[0], availableSims = sims)
+        }
+
+        val prefs = PreferencesManager.getInstance(context)
+        val userPref = prefs.getDefaultSim() // -1: Ask every time, 0: SIM 1, 1: SIM 2
+        if (userPref >= 0) {
+            val match = sims.find { it.slotIndex == userPref } ?: sims.firstOrNull()
+            return SimDecision(shouldAsk = false, selectedSim = match, availableSims = sims)
+        }
+
+        val telecomManager = context.getSystemService(Context.TELECOM_SERVICE) as? TelecomManager
+        val defaultAccount = try {
+            telecomManager?.getDefaultOutgoingPhoneAccount("tel")
+        } catch (e: Exception) {
+            null
+        }
+
+        val defaultVoiceSubId = try {
+            SubscriptionManager.getDefaultVoiceSubscriptionId()
+        } catch (e: Exception) {
+            SubscriptionManager.INVALID_SUBSCRIPTION_ID
+        }
+
+        if (defaultAccount != null) {
+            val matching = sims.find {
+                it.phoneAccountHandle == defaultAccount ||
+                defaultAccount.id.contains(it.subId.toString())
+            }
+            if (matching != null) {
+                return SimDecision(shouldAsk = false, selectedSim = matching, availableSims = sims)
+            }
+        }
+
+        if (defaultVoiceSubId != SubscriptionManager.INVALID_SUBSCRIPTION_ID) {
+            val matching = sims.find { it.subId == defaultVoiceSubId }
+            if (matching != null) {
+                return SimDecision(shouldAsk = false, selectedSim = matching, availableSims = sims)
+            }
+        }
+
+        return SimDecision(shouldAsk = true, selectedSim = null, availableSims = sims)
     }
 
     fun getSimCards(context: Context, forceRefresh: Boolean = false): List<SimSlotInfo> {

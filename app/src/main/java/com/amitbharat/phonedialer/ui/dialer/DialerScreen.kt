@@ -154,6 +154,7 @@ fun DialerScreen(
     var isDialpadOpen by remember { mutableStateOf(false) }
     var isSearchOpen by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
+    var callLogFilter by remember { mutableStateOf("ALL") }
     var showPasteMenu by remember { mutableStateOf(false) }
     var playingAudioPath by remember { mutableStateOf<String?>(null) }
     val focusRequester = remember { FocusRequester() }
@@ -366,14 +367,19 @@ fun DialerScreen(
                 val digitsOnly = extractOnlyDigits(first.number)
                 val last10 = if (digitsOnly.length >= 10) digitsOnly.takeLast(10) else digitsOnly
                 val matchedContact = savedNumberMap[cleanNum] ?: if (last10.isNotBlank()) savedNumberMap[last10] else null
-                val isSaved = matchedContact != null || first.isSavedContact
+                val isSaved = matchedContact != null || sortedItems.any { it.isSavedContact }
                 val recPath = sortedItems.firstOrNull { !it.recordingPath.isNullOrBlank() }?.recordingPath
+
+                val bestName = matchedContact?.name
+                    ?: sortedItems.firstOrNull { !it.name.isNullOrBlank() }?.name
+                    ?: com.amitbharat.phonedialer.repository.CallerIdResolver.lookupTruecaller(context, cleanNum, last10)
+                    ?: first.name
 
                 consolidatedList.add(
                     DayConsolidatedLog(
                         dayKey = dayKey,
                         primaryId = first.id,
-                        name = matchedContact?.name ?: first.name,
+                        name = bestName,
                         number = first.number,
                         latestTimestamp = first.timestamp,
                         callType = first.callType,
@@ -473,7 +479,7 @@ fun DialerScreen(
                                     .clip(RoundedCornerShape(14.dp))
                                     .clickable {
                                         val num = fav.numbers.firstOrNull() ?: ""
-                                        if (num.isNotBlank()) onCallClick(num, 0)
+                                        if (num.isNotBlank()) onCallClick(num, -1)
                                     }
                                     .padding(4.dp)
                             ) {
@@ -538,7 +544,7 @@ fun DialerScreen(
                                             Text(contact.numbers.firstOrNull() ?: "", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                         }
                                         IconButton(
-                                            onClick = { onCallClick(contact.numbers.firstOrNull() ?: enteredNumber, 0) },
+                                            onClick = { onCallClick(contact.numbers.firstOrNull() ?: enteredNumber, -1) },
                                             modifier = Modifier
                                                 .size(40.dp)
                                                 .background(AccentGreen.copy(alpha = 0.15f), CircleShape)
@@ -551,12 +557,32 @@ fun DialerScreen(
                         }
                     }
                 } else {
-                    val filteredLogs = remember(dayGroupedLogs, searchQuery) {
-                        if (searchQuery.isBlank()) {
+                    val filteredLogs = remember(dayGroupedLogs, searchQuery, callLogFilter) {
+                        val base = if (callLogFilter == "ALL") {
                             dayGroupedLogs
                         } else {
                             val map = LinkedHashMap<String, List<DayConsolidatedLog>>()
                             dayGroupedLogs.forEach { (dayKey, itemsInDay) ->
+                                val matching = itemsInDay.filter { item ->
+                                    when (callLogFilter) {
+                                        "MISSED" -> item.callType == CallType.MISSED || item.callType == CallType.REJECTED || item.callType == CallType.BLOCKED
+                                        "INCOMING" -> item.callType == CallType.INCOMING
+                                        "OUTGOING" -> item.callType == CallType.OUTGOING
+                                        else -> true
+                                    }
+                                }
+                                if (matching.isNotEmpty()) {
+                                    map[dayKey] = matching
+                                }
+                            }
+                            map
+                        }
+
+                        if (searchQuery.isBlank()) {
+                            base
+                        } else {
+                            val map = LinkedHashMap<String, List<DayConsolidatedLog>>()
+                            base.forEach { (dayKey, itemsInDay) ->
                                 val matching = itemsInDay.filter { item ->
                                     (item.name?.contains(searchQuery, ignoreCase = true) == true) ||
                                             item.number.contains(searchQuery)
@@ -569,15 +595,52 @@ fun DialerScreen(
                         }
                     }
 
-                    if (filteredLogs.isEmpty()) {
-                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Icon(Icons.Default.Call, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f), modifier = Modifier.size(54.dp))
-                                Spacer(Modifier.height(8.dp))
-                                Text("No call history", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        // Quick filter chips for Call History
+                        if (searchQuery.isEmpty() && enteredNumber.isEmpty()) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 14.dp, vertical = 2.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                FilterChip(
+                                    selected = callLogFilter == "ALL",
+                                    onClick = { callLogFilter = "ALL" },
+                                    label = { Text("All", fontSize = 12.sp) },
+                                    shape = RoundedCornerShape(16.dp)
+                                )
+                                FilterChip(
+                                    selected = callLogFilter == "MISSED",
+                                    onClick = { callLogFilter = "MISSED" },
+                                    label = { Text("Missed", fontSize = 12.sp) },
+                                    shape = RoundedCornerShape(16.dp)
+                                )
+                                FilterChip(
+                                    selected = callLogFilter == "INCOMING",
+                                    onClick = { callLogFilter = "INCOMING" },
+                                    label = { Text("Incoming", fontSize = 12.sp) },
+                                    shape = RoundedCornerShape(16.dp)
+                                )
+                                FilterChip(
+                                    selected = callLogFilter == "OUTGOING",
+                                    onClick = { callLogFilter = "OUTGOING" },
+                                    label = { Text("Outgoing", fontSize = 12.sp) },
+                                    shape = RoundedCornerShape(16.dp)
+                                )
                             }
                         }
-                    } else {
+
+                        if (filteredLogs.isEmpty()) {
+                            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Icon(Icons.Default.Call, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f), modifier = Modifier.size(54.dp))
+                                    Spacer(Modifier.height(8.dp))
+                                    Text("No call history", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                                }
+                            }
+                        } else {
                         LazyColumn(
                             state = listState,
                             modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp, vertical = 2.dp).simpleScrollbar(listState),
@@ -700,12 +763,24 @@ fun DialerScreen(
                                                 }
                                             }
 
-                                            // Action buttons: WhatsApp -> Message -> Call with theme-adaptive styling
-                                            ContactActionButtons(
-                                                number = group.number,
-                                                onMessageClick = { onMessageClick(group.number) },
-                                                onCallClick = { onCallClick(group.number, 0) }
-                                            )
+                                            // Action buttons: WhatsApp -> Message -> Call + Unsaved Red Bar Indicator
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                ContactActionButtons(
+                                                    number = group.number,
+                                                    onMessageClick = { onMessageClick(group.number) },
+                                                    onCallClick = { onCallClick(group.number, -1) }
+                                                )
+                                                if (!group.isSavedContact) {
+                                                    Spacer(Modifier.width(6.dp))
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .width(4.dp)
+                                                            .height(28.dp)
+                                                            .clip(RoundedCornerShape(2.dp))
+                                                            .background(AccentRed)
+                                                    )
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -749,6 +824,7 @@ fun DialerScreen(
                 }
             }
         }
+    }
     }
 
         val handleKeyPress: (String) -> Unit = { digit ->
@@ -860,7 +936,7 @@ fun DialerScreen(
             } else {
                 val sp = speedDials.find { it.digit == speedIndex }
                 if (sp != null) {
-                    onCallClick(sp.number, 0)
+                    onCallClick(sp.number, -1)
                 }
             }
         }

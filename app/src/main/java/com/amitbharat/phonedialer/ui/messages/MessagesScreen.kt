@@ -92,6 +92,7 @@ fun MessagesScreen(
     var isSearchOpen by remember { mutableStateOf(false) }
     var selectedThread by remember { mutableStateOf<MessageThread?>(null) }
     var showNewComposer by remember { mutableStateOf(false) }
+    var threadToDelete by remember { mutableStateOf<MessageThread?>(null) }
     val focusRequester = remember { FocusRequester() }
 
     val density = androidx.compose.ui.platform.LocalDensity.current
@@ -411,6 +412,21 @@ fun MessagesScreen(
                                         )
                                     }
 
+                                    // Delete thread button
+                                    IconButton(
+                                        onClick = {
+                                            threadToDelete = thread
+                                        },
+                                        modifier = Modifier.size(36.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Delete,
+                                            contentDescription = "Delete conversation",
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f),
+                                            modifier = Modifier.size(19.dp)
+                                        )
+                                    }
+
                                     // Vertical red line on right side for unread messages (Req 3)
                                     if (thread.unreadCount > 0) {
                                         Spacer(Modifier.width(6.dp))
@@ -558,6 +574,38 @@ fun MessagesScreen(
                         }
                     }
                 }
+            }
+
+            if (threadToDelete != null) {
+                val target = threadToDelete!!
+                val coroutineScope = rememberCoroutineScope()
+                AlertDialog(
+                    onDismissRequest = { threadToDelete = null },
+                    title = { Text("Delete Conversation?", fontWeight = FontWeight.Bold) },
+                    text = {
+                        val nameOrNum = target.contactName ?: target.displayAddress
+                        Text("Are you sure you want to delete all messages with $nameOrNum?")
+                    },
+                    confirmButton = {
+                        TextButton(
+                            onClick = {
+                                val addr = target.displayAddress
+                                threadToDelete = null
+                                coroutineScope.launch(Dispatchers.IO) {
+                                    smsRepo.deleteThread(addr)
+                                }
+                                Toast.makeText(context, "Conversation deleted", Toast.LENGTH_SHORT).show()
+                            }
+                        ) {
+                            Text("Delete", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold)
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { threadToDelete = null }) {
+                            Text("Cancel")
+                        }
+                    }
+                )
             }
         }
     }
@@ -1056,8 +1104,39 @@ fun ChatThreadScreen(
                             tint = if (isArchived) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
+                    var showDeleteThreadDialog by remember { mutableStateOf(false) }
+                    IconButton(onClick = { showDeleteThreadDialog = true }) {
+                        Icon(Icons.Default.Delete, contentDescription = "Delete Thread", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                     IconButton(onClick = onCallClick) {
                         Icon(Icons.Default.Call, contentDescription = "Call", tint = AccentGreen)
+                    }
+
+                    if (showDeleteThreadDialog) {
+                        AlertDialog(
+                            onDismissRequest = { showDeleteThreadDialog = false },
+                            title = { Text("Delete Conversation?", fontWeight = FontWeight.Bold) },
+                            text = { Text("Are you sure you want to delete all messages in this conversation?") },
+                            confirmButton = {
+                                TextButton(
+                                    onClick = {
+                                        showDeleteThreadDialog = false
+                                        coroutineScope.launch(Dispatchers.IO) {
+                                            smsRepo.deleteThread(thread.displayAddress)
+                                        }
+                                        onBack()
+                                        Toast.makeText(context, "Conversation deleted", Toast.LENGTH_SHORT).show()
+                                    }
+                                ) {
+                                    Text("Delete", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold)
+                                }
+                            },
+                            dismissButton = {
+                                TextButton(onClick = { showDeleteThreadDialog = false }) {
+                                    Text("Cancel")
+                                }
+                            }
+                        )
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface)
@@ -1152,6 +1231,9 @@ fun ChatThreadScreen(
             }
         }
     ) { innerPadding ->
+        var selectedMessageForOptions by remember { mutableStateOf<SmsMessageItem?>(null) }
+        val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
+
         LazyColumn(
             state = listState,
             modifier = Modifier
@@ -1169,7 +1251,11 @@ fun ChatThreadScreen(
                     Surface(
                         shape = RoundedCornerShape(16.dp),
                         color = bg,
-                        modifier = Modifier.widthIn(max = 280.dp)
+                        modifier = Modifier
+                            .widthIn(max = 280.dp)
+                            .clickable {
+                                selectedMessageForOptions = msg
+                            }
                     ) {
                         Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
                             Text(msg.body, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurface)
@@ -1213,6 +1299,49 @@ fun ChatThreadScreen(
                     }
                 }
             }
+        }
+
+        if (selectedMessageForOptions != null) {
+            val msg = selectedMessageForOptions!!
+            AlertDialog(
+                onDismissRequest = { selectedMessageForOptions = null },
+                title = { Text("Message Options", fontWeight = FontWeight.Bold) },
+                text = {
+                    Text(msg.body, maxLines = 6, overflow = TextOverflow.Ellipsis)
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(msg.body))
+                            selectedMessageForOptions = null
+                            Toast.makeText(context, "Message copied to clipboard", Toast.LENGTH_SHORT).show()
+                        }
+                    ) {
+                        Text("Copy Text", fontWeight = FontWeight.Bold)
+                    }
+                },
+                dismissButton = {
+                    Row {
+                        TextButton(
+                            onClick = {
+                                val msgId = msg.id
+                                selectedMessageForOptions = null
+                                coroutineScope.launch(Dispatchers.IO) {
+                                    smsRepo.deleteMessage(msgId)
+                                }
+                                localSentMessages = localSentMessages.filter { it.id != msgId }
+                                refreshTrigger++
+                                Toast.makeText(context, "Message deleted", Toast.LENGTH_SHORT).show()
+                            }
+                        ) {
+                            Text("Delete", color = MaterialTheme.colorScheme.error)
+                        }
+                        TextButton(onClick = { selectedMessageForOptions = null }) {
+                            Text("Close")
+                        }
+                    }
+                }
+            )
         }
     }
 }

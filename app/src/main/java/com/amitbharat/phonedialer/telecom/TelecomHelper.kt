@@ -21,7 +21,12 @@ object TelecomHelper {
         }
     }
 
-    fun makeCall(context: Context, number: String, simSlot: Int = 0) {
+    fun makeCall(
+        context: Context,
+        number: String,
+        simSlot: Int = -1,
+        preferredAccount: android.telecom.PhoneAccountHandle? = null
+    ) {
         val cleanNumber = number.replace("[^0-9+]".toRegex(), "")
         if (cleanNumber.isBlank()) return
         val uri = Uri.fromParts("tel", cleanNumber, null)
@@ -39,7 +44,7 @@ object TelecomHelper {
             emptyList()
         }
 
-        val targetAccount = if (simSlot in phoneAccounts.indices) {
+        val targetAccount = preferredAccount ?: if (simSlot in phoneAccounts.indices) {
             phoneAccounts[simSlot]
         } else {
             phoneAccounts.firstOrNull()
@@ -60,11 +65,13 @@ object TelecomHelper {
             try {
                 val callIntent = Intent(Intent.ACTION_CALL, uri).apply {
                     flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                    putExtra("com.android.phone.force.slot", true)
-                    putExtra("Cdma_SimId", simSlot)
-                    putExtra("simSlot", simSlot)
-                    putExtra("slot", simSlot)
-                    putExtra("sim_slot", simSlot)
+                    if (simSlot >= 0) {
+                        putExtra("com.android.phone.force.slot", true)
+                        putExtra("Cdma_SimId", simSlot)
+                        putExtra("simSlot", simSlot)
+                        putExtra("slot", simSlot)
+                        putExtra("sim_slot", simSlot)
+                    }
                     if (targetAccount != null) {
                         putExtra(TelecomManager.EXTRA_PHONE_ACCOUNT_HANDLE, targetAccount)
                     }

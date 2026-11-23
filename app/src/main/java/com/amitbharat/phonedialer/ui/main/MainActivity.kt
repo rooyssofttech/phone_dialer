@@ -10,6 +10,7 @@ import android.os.Bundle
 import android.telecom.TelecomManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.*
 import androidx.core.content.ContextCompat
@@ -64,6 +65,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         contactsRepo = ContactsRepository(this)
         callLogRepo = CallLogRepository(this)
@@ -83,11 +85,10 @@ class MainActivity : ComponentActivity() {
         })
 
         lifecycleScope.launch(Dispatchers.IO) {
-            // Lazy load non-critical data after UI is completely rendered
-            kotlinx.coroutines.delay(3000)
-            com.amitbharat.phonedialer.utils.WhatsAppHelper.refreshWhatsAppContacts(this@MainActivity)
+            // Immediate background pre-load of SMS threads and WhatsApp contacts
             com.amitbharat.phonedialer.repository.SmsRepository.getInstance(this@MainActivity)
                 .loadThreads(contactsRepo.getCachedContacts())
+            com.amitbharat.phonedialer.utils.WhatsAppHelper.refreshWhatsAppContacts(this@MainActivity)
         }
 
         setContent {
@@ -100,6 +101,34 @@ class MainActivity : ComponentActivity() {
             val targetTab by targetTabState
             val targetChatAddress by targetChatAddressState
 
+            var pendingSimSelectNumber by remember { mutableStateOf<String?>(null) }
+            var pendingSimSelectSims by remember { mutableStateOf<List<com.amitbharat.phonedialer.utils.SimSlotInfo>>(emptyList()) }
+            var pendingSimSelectContactName by remember { mutableStateOf<String?>(null) }
+
+            fun initiateCall(number: String, simSlot: Int = -1) {
+                if (number.isBlank()) return
+                if (simSlot >= 0) {
+                    TelecomHelper.makeCall(this@MainActivity, number, simSlot)
+                    return
+                }
+                val decision = com.amitbharat.phonedialer.utils.SimHelper.getSimDecision(this@MainActivity)
+                if (decision.shouldAsk && decision.availableSims.size > 1) {
+                    pendingSimSelectNumber = number
+                    pendingSimSelectSims = decision.availableSims
+                    pendingSimSelectContactName = contacts.find { c ->
+                        val cleanTarget = number.replace(Regex("[^0-9+]"), "")
+                        c.numbers.any { n -> n.replace(Regex("[^0-9+]"), "") == cleanTarget }
+                    }?.name
+                } else {
+                    TelecomHelper.makeCall(
+                        this@MainActivity,
+                        number,
+                        decision.selectedSim?.slotIndex ?: 0,
+                        decision.selectedSim?.phoneAccountHandle
+                    )
+                }
+            }
+
             PhoneDialerTheme(themeMode = themeMode) {
                 MainScreen(
                     contacts = contacts,
@@ -109,7 +138,7 @@ class MainActivity : ComponentActivity() {
                     initialTab = targetTab,
                     initialChatAddress = targetChatAddress,
                     onCallClick = { number, sim ->
-                        TelecomHelper.makeCall(this@MainActivity, number, sim)
+                        initiateCall(number, sim)
                     },
                     onAddContact = { contact ->
                         lifecycleScope.launch { contactsRepo.addContact(contact) }
@@ -135,6 +164,30 @@ class MainActivity : ComponentActivity() {
                         lifecycleScope.launch { callLogRepo.loadMoreCallLogs(15) }
                     }
                 )
+
+                if (pendingSimSelectNumber != null) {
+                    com.amitbharat.phonedialer.ui.components.SimSelectionDialog(
+                        number = pendingSimSelectNumber!!,
+                        contactName = pendingSimSelectContactName,
+                        sims = pendingSimSelectSims,
+                        onSelectSim = { selectedSim, rememberChoice ->
+                            val targetNum = pendingSimSelectNumber!!
+                            pendingSimSelectNumber = null
+                            if (rememberChoice) {
+                                prefs.setDefaultSim(selectedSim.slotIndex)
+                            }
+                            TelecomHelper.makeCall(
+                                this@MainActivity,
+                                targetNum,
+                                selectedSim.slotIndex,
+                                selectedSim.phoneAccountHandle
+                            )
+                        },
+                        onDismiss = {
+                            pendingSimSelectNumber = null
+                        }
+                    )
+                }
             }
         }
     }

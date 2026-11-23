@@ -89,16 +89,32 @@ class CallLogRepository(private val context: Context) {
     fun getAllCallLogs(forceRefresh: Boolean = false): Flow<List<CallLogItem>> = flow {
         val now = System.currentTimeMillis()
         val cached = cachedCallLogs
-        if (!forceRefresh && cached != null && (now - lastLogFetchTime < 30_000)) {
+        if (!cached.isNullOrEmpty()) {
             emit(cached)
+            if (!forceRefresh && (now - lastLogFetchTime < 30_000)) {
+                _callLogsFlow.collect { updatedList ->
+                    if (updatedList.isNotEmpty()) emit(updatedList)
+                }
+            }
         } else {
-            // By default, query only the last 15 days for speed and memory efficiency
-            val recentLogs = deduplicateLogs(fetchDeviceCallLogsDirectly(daysLimit = currentDaysLimit))
-            cachedCallLogs = recentLogs
-            lastLogFetchTime = now
-            _callLogsFlow.value = recentLogs
-            emit(recentLogs)
+            // Stage 1: Ultra-fast fetch of top 40 call logs (0ms perceived startup!)
+            try {
+                val fastLogs = deduplicateLogs(fetchDeviceCallLogsDirectly(daysLimit = null, maxCount = 40, skipRecordings = true))
+                if (fastLogs.isNotEmpty()) {
+                    cachedCallLogs = fastLogs
+                    lastLogFetchTime = now
+                    _callLogsFlow.value = fastLogs
+                    emit(fastLogs)
+                }
+            } catch (ignored: Exception) {}
         }
+
+        // Stage 2: Query full call logs up to current days limit in background
+        val recentLogs = deduplicateLogs(fetchDeviceCallLogsDirectly(daysLimit = currentDaysLimit, skipRecordings = true))
+        cachedCallLogs = recentLogs
+        lastLogFetchTime = System.currentTimeMillis()
+        _callLogsFlow.value = recentLogs
+        emit(recentLogs)
 
         _callLogsFlow.collect { updatedList ->
             if (updatedList.isNotEmpty()) {
@@ -138,14 +154,18 @@ class CallLogRepository(private val context: Context) {
         callLogDao.clearCallLogs()
     }
 
-    fun fetchDeviceCallLogsDirectly(daysLimit: Int? = currentDaysLimit, maxCount: Int? = null): List<CallLogItem> {
+    fun fetchDeviceCallLogsDirectly(
+        daysLimit: Int? = currentDaysLimit,
+        maxCount: Int? = null,
+        skipRecordings: Boolean = false
+    ): List<CallLogItem> {
         val result = mutableListOf<CallLogItem>()
         try {
-            // Build saved contact number sets for O(1) instant lookup
-            val (savedExactNumbers, savedLast10Numbers) = getSavedContactNumberIndices()
+            // Build saved contact number indices and name map for O(1) instant lookup
+            val savedIndex = getSavedContactIndex()
 
             // Skip file scanning during fast initial load
-            val recordingsMap = if (maxCount != null && maxCount <= 50) emptyMap() else getRecordingsMap()
+            val recordingsMap = if (skipRecordings || (maxCount != null && maxCount <= 50)) emptyMap() else getRecordingsMap()
 
             val resolver: ContentResolver = context.contentResolver
             val (selection, selectionArgs) = if (daysLimit != null) {
@@ -158,20 +178,43 @@ class CallLogRepository(private val context: Context) {
             // Always use safe sort order without LIMIT keyword (LIMIT in sortOrder causes crashes on Android 10+)
             val sortOrder = "${CallLog.Calls.DATE} DESC"
 
-            val cursor = resolver.query(
-                CallLog.Calls.CONTENT_URI,
-                arrayOf(
-                    CallLog.Calls._ID,
-                    CallLog.Calls.NUMBER,
-                    CallLog.Calls.CACHED_NAME,
-                    CallLog.Calls.TYPE,
-                    CallLog.Calls.DATE,
-                    CallLog.Calls.DURATION
-                ),
-                selection,
-                selectionArgs,
-                sortOrder
+            val extendedProjection = arrayOf(
+                CallLog.Calls._ID,
+                CallLog.Calls.NUMBER,
+                CallLog.Calls.CACHED_NAME,
+                CallLog.Calls.TYPE,
+                CallLog.Calls.DATE,
+                CallLog.Calls.DURATION,
+                "cnap_name",
+                "asserted_display_name"
             )
+
+            val standardProjection = arrayOf(
+                CallLog.Calls._ID,
+                CallLog.Calls.NUMBER,
+                CallLog.Calls.CACHED_NAME,
+                CallLog.Calls.TYPE,
+                CallLog.Calls.DATE,
+                CallLog.Calls.DURATION
+            )
+
+            val cursor = try {
+                resolver.query(
+                    CallLog.Calls.CONTENT_URI,
+                    extendedProjection,
+                    selection,
+                    selectionArgs,
+                    sortOrder
+                )
+            } catch (e: Exception) {
+                resolver.query(
+                    CallLog.Calls.CONTENT_URI,
+                    standardProjection,
+                    selection,
+                    selectionArgs,
+                    sortOrder
+                )
+            }
 
             cursor?.use {
                 val idIdx = it.getColumnIndex(CallLog.Calls._ID)
@@ -180,14 +223,42 @@ class CallLogRepository(private val context: Context) {
                 val typeIdx = it.getColumnIndex(CallLog.Calls.TYPE)
                 val dateIdx = it.getColumnIndex(CallLog.Calls.DATE)
                 val durIdx = it.getColumnIndex(CallLog.Calls.DURATION)
+                val cnapIdx = it.getColumnIndex("cnap_name")
+                val assertedIdx = it.getColumnIndex("asserted_display_name")
+
+                class TempCallRecord(
+                    val id: Long,
+                    val number: String,
+                    val cleanNum: String,
+                    val last10: String,
+                    val rawName: String?,
+                    val cnapName: String?,
+                    val assertedName: String?,
+                    val callType: CallType,
+                    val date: Long,
+                    val duration: Long
+                )
+
+                val tempRecords = ArrayList<TempCallRecord>()
+                val discoveredGovtNames = HashMap<String, String>()
 
                 while (it.moveToNext()) {
-                    if (maxCount != null && result.size >= maxCount) {
+                    if (maxCount != null && tempRecords.size >= maxCount) {
                         break
                     }
-                    val id = if (idIdx >= 0) it.getLong(idIdx) else 0L
                     val number = if (numIdx >= 0) it.getString(numIdx) ?: "" else ""
-                    val name = if (nameIdx >= 0) it.getString(nameIdx) else null
+                    if (number.isBlank()) continue
+
+                    val digitsOnly = extractDigits(number)
+                    if (digitsOnly.length < 3) continue
+
+                    val cleanNum = extractCleanNumber(number)
+                    val last10 = if (digitsOnly.length >= 10) digitsOnly.takeLast(10) else digitsOnly
+
+                    val id = if (idIdx >= 0) it.getLong(idIdx) else 0L
+                    val rawName = if (nameIdx >= 0) it.getString(nameIdx) else null
+                    val cnapName = if (cnapIdx >= 0) it.getString(cnapIdx) else null
+                    val assertedName = if (assertedIdx >= 0) it.getString(assertedIdx) else null
                     val rawType = if (typeIdx >= 0) it.getInt(typeIdx) else CallLog.Calls.OUTGOING_TYPE
                     val date = if (dateIdx >= 0) it.getLong(dateIdx) else System.currentTimeMillis()
                     val duration = if (durIdx >= 0) it.getLong(durIdx) else 0L
@@ -198,37 +269,91 @@ class CallLogRepository(private val context: Context) {
                         CallLog.Calls.MISSED_TYPE -> CallType.MISSED
                         CallLog.Calls.REJECTED_TYPE -> CallType.REJECTED
                         CallLog.Calls.BLOCKED_TYPE -> CallType.BLOCKED
-                        else -> null // Reject OEM SMS/MMS types or unknown types
+                        else -> null
                     }
-
-                    // Only process recognized call types
                     if (callType == null) continue
 
-                    if (number.isNotBlank()) {
-                        val digitsOnly = number.filter { it.isDigit() }
-                        // Filter out SMS sender IDs or non-dialable short codes without digits
-                        if (digitsOnly.length < 3) continue
+                    // Check if CNAP or asserted name has a valid government / carrier name
+                    val candGovtName = listOfNotNull(cnapName, assertedName, rawName).firstOrNull { cand ->
+                        val trimmed = cand.trim()
+                        trimmed.isNotBlank() &&
+                        trimmed != number &&
+                        trimmed != cleanNum &&
+                        !trimmed.equals("Unknown", ignoreCase = true) &&
+                        !trimmed.equals("Private Number", ignoreCase = true) &&
+                        !trimmed.equals("Private", ignoreCase = true)
+                    }?.trim()
 
-                        val cleanNum = number.replace(Regex("[^0-9+]"), "")
-                        val last10 = if (digitsOnly.length >= 10) digitsOnly.takeLast(10) else digitsOnly
-                        val isSaved = savedExactNumbers.contains(cleanNum) || 
-                                      (last10.isNotBlank() && savedLast10Numbers.contains(last10))
-                        val recordingPath = recordingsMap[cleanNum]
-
-                        result.add(
-                            CallLogItem(
-                                id = id,
-                                number = number,
-                                name = if (!name.isNullOrBlank()) name else null,
-                                callType = callType,
-                                timestamp = date,
-                                duration = duration,
-                                simSlot = 0,
-                                recordingPath = recordingPath,
-                                isSavedContact = isSaved
-                            )
-                        )
+                    if (!candGovtName.isNullOrBlank()) {
+                        if (cleanNum.isNotBlank()) discoveredGovtNames[cleanNum] = candGovtName
+                        if (last10.isNotBlank()) discoveredGovtNames[last10] = candGovtName
+                        CallerIdResolver.cacheCallerId(context, cleanNum, candGovtName)
+                        if (last10.isNotBlank()) CallerIdResolver.cacheCallerId(context, last10, candGovtName)
                     }
+
+                    tempRecords.add(
+                        TempCallRecord(
+                            id = id,
+                            number = number,
+                            cleanNum = cleanNum,
+                            last10 = last10,
+                            rawName = rawName,
+                            cnapName = cnapName,
+                            assertedName = assertedName,
+                            callType = callType,
+                            date = date,
+                            duration = duration
+                        )
+                    )
+                }
+
+                for (record in tempRecords) {
+                    val cleanNum = record.cleanNum
+                    val last10 = record.last10
+                    val number = record.number
+
+                    val savedName = savedIndex.nameMap[cleanNum] ?: if (last10.isNotBlank()) savedIndex.nameMap[last10] else null
+                    val isSaved = savedName != null || savedIndex.exactSet.contains(cleanNum) || 
+                                  (last10.isNotBlank() && savedIndex.last10Set.contains(last10))
+
+                    // Priority Hierarchy:
+                    // 1. Saved Contact: If saved in phonebook, ALWAYS use the saved name!
+                    // 2. Unsaved:
+                    //    a. Govt CNAP name (from row, discovered across other calls of same number, or cached)
+                    //    b. Truecaller / Persistent caller ID
+                    val resolvedName = if (isSaved) {
+                        savedName ?: record.rawName
+                    } else {
+                        val govtName = discoveredGovtNames[cleanNum]
+                            ?: (if (last10.isNotBlank()) discoveredGovtNames[last10] else null)
+                            ?: listOfNotNull(record.cnapName, record.assertedName, record.rawName).firstOrNull { cand ->
+                                val trimmed = cand.trim()
+                                trimmed.isNotBlank() &&
+                                trimmed != number &&
+                                trimmed != cleanNum &&
+                                !trimmed.equals("Unknown", ignoreCase = true) &&
+                                !trimmed.equals("Private Number", ignoreCase = true) &&
+                                !trimmed.equals("Private", ignoreCase = true)
+                            }?.trim()
+
+                        govtName ?: CallerIdResolver.lookupTruecaller(context, cleanNum, last10)
+                    }
+
+                    val recordingPath = recordingsMap[cleanNum]
+
+                    result.add(
+                        CallLogItem(
+                            id = record.id,
+                            number = number,
+                            name = if (!resolvedName.isNullOrBlank()) resolvedName else null,
+                            callType = record.callType,
+                            timestamp = record.date,
+                            duration = record.duration,
+                            simSlot = 0,
+                            recordingPath = recordingPath,
+                            isSavedContact = isSaved
+                        )
+                    )
                 }
             }
         } catch (e: Exception) {
@@ -237,49 +362,80 @@ class CallLogRepository(private val context: Context) {
         return result
     }
 
-    private fun getSavedContactNumberIndices(): Pair<Set<String>, Set<String>> {
+    private data class SavedContactIndex(
+        val exactSet: Set<String>,
+        val last10Set: Set<String>,
+        val nameMap: Map<String, String>
+    )
+
+    private fun getSavedContactIndex(): SavedContactIndex {
         val exactSet = HashSet<String>()
         val last10Set = HashSet<String>()
+        val nameMap = HashMap<String, String>()
 
         // First check if cached contacts are already in memory to avoid querying ContactsProvider
         val cached = ContactsRepository.getCachedContacts()
         if (cached.isNotEmpty()) {
             for (contact in cached) {
+                val cName = contact.name.trim()
                 for (num in contact.numbers) {
                     val clean = extractCleanNumber(num)
                     val digits = extractDigits(num)
-                    if (clean.isNotBlank()) exactSet.add(clean)
-                    if (digits.length >= 10) last10Set.add(digits.takeLast(10))
-                    else if (digits.isNotBlank()) last10Set.add(digits)
+                    if (clean.isNotBlank()) {
+                        exactSet.add(clean)
+                        nameMap[clean] = cName
+                    }
+                    if (digits.length >= 10) {
+                        val l10 = digits.takeLast(10)
+                        last10Set.add(l10)
+                        nameMap[l10] = cName
+                    } else if (digits.isNotBlank()) {
+                        last10Set.add(digits)
+                        nameMap[digits] = cName
+                    }
                 }
             }
-            return Pair(exactSet, last10Set)
+            return SavedContactIndex(exactSet, last10Set, nameMap)
         }
 
         try {
             val resolver = context.contentResolver
             val cursor = resolver.query(
                 ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
-                arrayOf(ContactsContract.CommonDataKinds.Phone.NUMBER),
+                arrayOf(
+                    ContactsContract.CommonDataKinds.Phone.NUMBER,
+                    ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME
+                ),
                 null,
                 null,
                 null
             )
             cursor?.use {
                 val numIdx = it.getColumnIndex(ContactsContract.CommonDataKinds.Phone.NUMBER)
+                val nameIdx = it.getColumnIndex(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME)
                 while (it.moveToNext()) {
                     val raw = if (numIdx >= 0) it.getString(numIdx) ?: "" else ""
+                    val cName = if (nameIdx >= 0) it.getString(nameIdx)?.trim() ?: "" else ""
                     val clean = extractCleanNumber(raw)
                     val digits = extractDigits(raw)
-                    if (clean.isNotBlank()) exactSet.add(clean)
-                    if (digits.length >= 10) last10Set.add(digits.takeLast(10))
-                    else if (digits.isNotBlank()) last10Set.add(digits)
+                    if (clean.isNotBlank()) {
+                        exactSet.add(clean)
+                        if (cName.isNotBlank()) nameMap[clean] = cName
+                    }
+                    if (digits.length >= 10) {
+                        val l10 = digits.takeLast(10)
+                        last10Set.add(l10)
+                        if (cName.isNotBlank()) nameMap[l10] = cName
+                    } else if (digits.isNotBlank()) {
+                        last10Set.add(digits)
+                        if (cName.isNotBlank()) nameMap[digits] = cName
+                    }
                 }
             }
         } catch (e: Exception) {
             e.printStackTrace()
         }
-        return Pair(exactSet, last10Set)
+        return SavedContactIndex(exactSet, last10Set, nameMap)
     }
 
     private fun getRecordingsMap(): Map<String, String> {

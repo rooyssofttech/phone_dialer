@@ -24,6 +24,10 @@ data class ActiveCallState(
     val isIncoming: Boolean = false,
     val isMuted: Boolean = false,
     val isSpeakerOn: Boolean = false,
+    val audioRoute: Int = CallAudioState.ROUTE_EARPIECE,
+    val supportedAudioRoutes: Int = CallAudioState.ROUTE_EARPIECE or CallAudioState.ROUTE_SPEAKER,
+    val isBluetoothConnected: Boolean = false,
+    val isBluetoothActive: Boolean = false,
     val isHeld: Boolean = false,
     val isRecording: Boolean = false,
     val callDurationSeconds: Long = 0,
@@ -217,11 +221,34 @@ object CallManager {
         }
     }
 
-    fun updateAudioState(isMuted: Boolean, isSpeakerOn: Boolean) {
+    fun updateAudioState(
+        isMuted: Boolean,
+        isSpeakerOn: Boolean,
+        audioRoute: Int = if (isSpeakerOn) CallAudioState.ROUTE_SPEAKER else CallAudioState.ROUTE_EARPIECE,
+        supportedRoutes: Int = CallAudioState.ROUTE_EARPIECE or CallAudioState.ROUTE_SPEAKER,
+        isBluetoothConnected: Boolean = false,
+        isBluetoothActive: Boolean = false
+    ) {
         _callState.value = _callState.value.copy(
             isMuted = isMuted,
-            isSpeakerOn = isSpeakerOn
+            isSpeakerOn = isSpeakerOn,
+            audioRoute = audioRoute,
+            supportedAudioRoutes = supportedRoutes,
+            isBluetoothConnected = isBluetoothConnected,
+            isBluetoothActive = isBluetoothActive
         )
+    }
+
+    fun setAudioRoute(route: Int) {
+        DialerInCallService.instance?.setAudioRoute(route)
+        val isSpeaker = route == CallAudioState.ROUTE_SPEAKER
+        val isBtActive = route == CallAudioState.ROUTE_BLUETOOTH
+        _callState.value = _callState.value.copy(
+            audioRoute = route,
+            isSpeakerOn = isSpeaker,
+            isBluetoothActive = isBtActive
+        )
+        DialerInCallService.instance?.updateOngoingNotification()
     }
 
     fun setMuted(muted: Boolean) {
@@ -232,9 +259,7 @@ object CallManager {
 
     fun setSpeakerphoneOn(on: Boolean) {
         val route = if (on) CallAudioState.ROUTE_SPEAKER else CallAudioState.ROUTE_EARPIECE
-        DialerInCallService.instance?.setAudioRoute(route)
-        _callState.value = _callState.value.copy(isSpeakerOn = on)
-        DialerInCallService.instance?.updateOngoingNotification()
+        setAudioRoute(route)
     }
 
     fun toggleHold() {
@@ -316,64 +341,43 @@ object CallManager {
     }
 
     private fun resolveContact(number: String, fallbackName: String?, fallbackPhoto: String?): Pair<String?, String?> {
-        var callerName = fallbackName
         var photoUri = fallbackPhoto
 
-        // 1. Cached contacts match
         if (number.isNotBlank()) {
-            val cleanIncoming = number.replace(Regex("[^0-9]"), "")
+            val cleanIncoming = com.amitbharat.phonedialer.repository.CallerIdResolver.extractCleanNumber(number)
+            val digits = com.amitbharat.phonedialer.repository.CallerIdResolver.extractDigits(number)
+            val last10 = if (digits.length >= 10) digits.takeLast(10) else digits
+
             val cachedContact = com.amitbharat.phonedialer.repository.ContactsRepository.getCachedContacts().find { c ->
                 c.numbers.any { n ->
-                    val cleanC = n.replace(Regex("[^0-9]"), "")
-                    cleanC == cleanIncoming || (cleanC.length >= 10 && cleanIncoming.length >= 10 && cleanC.takeLast(10) == cleanIncoming.takeLast(10))
+                    val cClean = com.amitbharat.phonedialer.repository.CallerIdResolver.extractCleanNumber(n)
+                    val cDigits = com.amitbharat.phonedialer.repository.CallerIdResolver.extractDigits(n)
+                    val cLast10 = if (cDigits.length >= 10) cDigits.takeLast(10) else cDigits
+                    (cleanIncoming.isNotBlank() && cClean == cleanIncoming) ||
+                    (last10.isNotBlank() && cLast10 == last10)
                 }
             }
-            if (cachedContact != null) {
-                if (callerName.isNullOrBlank() || callerName == number) {
-                    callerName = cachedContact.name
-                }
-                if (photoUri.isNullOrBlank()) {
-                    photoUri = cachedContact.photoUri
-                }
+            if (cachedContact != null && photoUri.isNullOrBlank()) {
+                photoUri = cachedContact.photoUri
             }
         }
 
-        // 2. PhoneLookup query fallback
-        val context = appContext
-        if (context != null && number.isNotBlank() && (callerName.isNullOrBlank() || photoUri.isNullOrBlank())) {
-            try {
-                val uri = Uri.withAppendedPath(ContactsContract.PhoneLookup.CONTENT_FILTER_URI, Uri.encode(number))
-                val cursor: Cursor? = context.contentResolver.query(
-                    uri,
-                    arrayOf(
-                        ContactsContract.PhoneLookup.DISPLAY_NAME,
-                        ContactsContract.PhoneLookup.PHOTO_URI,
-                        ContactsContract.PhoneLookup.PHOTO_THUMBNAIL_URI
-                    ),
-                    null,
-                    null,
-                    null
-                )
-                cursor?.use {
-                    if (it.moveToFirst()) {
-                        val nameIdx = it.getColumnIndex(ContactsContract.PhoneLookup.DISPLAY_NAME)
-                        val photoIdx = it.getColumnIndex(ContactsContract.PhoneLookup.PHOTO_URI)
-                        val thumbIdx = it.getColumnIndex(ContactsContract.PhoneLookup.PHOTO_THUMBNAIL_URI)
-                        if (nameIdx >= 0) {
-                            val name = it.getString(nameIdx)
-                            if (!name.isNullOrBlank() && callerName.isNullOrBlank()) callerName = name
-                        }
-                        if (photoIdx >= 0 && photoUri.isNullOrBlank()) {
-                            photoUri = it.getString(photoIdx)
-                        }
-                        if (thumbIdx >= 0 && photoUri.isNullOrBlank()) {
-                            photoUri = it.getString(thumbIdx)
-                        }
-                    }
-                }
-            } catch (ignored: Exception) {}
+        val ctx = appContext ?: com.amitbharat.phonedialer.DialerApp.instance
+        val resolved = if (ctx != null) {
+            com.amitbharat.phonedialer.repository.CallerIdResolver.resolveCallerName(
+                context = ctx,
+                rawNumber = number,
+                govtName = fallbackName
+            )
+        } else {
+            null
         }
-        return Pair(callerName, photoUri)
+
+        val finalName = resolved?.name ?: fallbackName
+        if (ctx != null && !finalName.isNullOrBlank() && (resolved == null || !resolved.isSaved)) {
+            com.amitbharat.phonedialer.repository.CallerIdResolver.cacheCallerId(ctx, number, finalName)
+        }
+        return Pair(finalName, photoUri)
     }
 
     private fun updateStateFromCalls() {
@@ -467,6 +471,9 @@ object CallManager {
             callWaitingName = if (hasCallWaiting) (secondaryName ?: secondaryNumber) else null,
             callWaitingPhotoUri = if (hasCallWaiting) secondaryPhoto else null
         )
+
+        // Ensure notification is synchronized with the latest active call state
+        DialerInCallService.instance?.updateOngoingNotification()
     }
 
     private fun startDurationTimer() {

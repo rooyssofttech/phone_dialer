@@ -8,8 +8,14 @@ import com.amitbharat.phonedialer.utils.SmsNotificationHelper
 import com.amitbharat.phonedialer.utils.ThemeUtils
 
 class DialerApp : Application() {
+    companion object {
+        lateinit var instance: DialerApp
+            private set
+    }
+
     override fun onCreate() {
         super.onCreate()
+        instance = this
         ThemeUtils.applyTheme(this)
         DialerInCallService.createNotificationChannels(this)
         SmsNotificationHelper.createNotificationChannel(this)

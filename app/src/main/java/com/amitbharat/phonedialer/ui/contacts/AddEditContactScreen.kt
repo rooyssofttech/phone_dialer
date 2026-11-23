@@ -41,7 +41,7 @@ fun AddEditContactScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                windowInsets = WindowInsets(0.dp),
+                windowInsets = TopAppBarDefaults.windowInsets,
                 title = {
                     Text(
                         text = if (initialContact == null) "Create Contact" else "Edit Contact",
@@ -98,6 +98,8 @@ fun AddEditContactScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
+                .navigationBarsPadding()
+                .imePadding()
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp, vertical = 4.dp),
             horizontalAlignment = Alignment.CenterHorizontally,

@@ -9,6 +9,9 @@ interface ContactDao {
     @Query("SELECT * FROM contacts ORDER BY name ASC")
     fun getAllContacts(): Flow<List<ContactEntity>>
 
+    @Query("SELECT * FROM contacts ORDER BY name ASC")
+    suspend fun getAllContactsDirect(): List<ContactEntity>
+
     @Query("SELECT * FROM contacts WHERE isFavorite = 1 ORDER BY name ASC")
     fun getFavoriteContacts(): Flow<List<ContactEntity>>
 

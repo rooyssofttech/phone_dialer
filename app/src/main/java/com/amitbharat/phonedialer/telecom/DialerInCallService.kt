@@ -35,8 +35,9 @@ class DialerInCallService : InCallService(), SensorEventListener {
 
     companion object {
         var instance: DialerInCallService? = null
-        const val INCOMING_CHANNEL_ID = "incoming_call_channel"
-        const val ONGOING_CHANNEL_ID = "ongoing_call_channel"
+        const val CALL_CHANNEL_ID = "phone_call_channel"
+        const val INCOMING_CHANNEL_ID = "phone_call_channel"
+        const val ONGOING_CHANNEL_ID = "phone_call_channel"
         private const val NOTIFICATION_ID = 1001
 
         const val ACTION_HANGUP = "com.amitbharat.phonedialer.ACTION_HANGUP"
@@ -49,30 +50,19 @@ class DialerInCallService : InCallService(), SensorEventListener {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
-                // Channel for Incoming Calls: HIGH importance so Heads-Up alert is shown
-                val incomingChannel = NotificationChannel(
-                    INCOMING_CHANNEL_ID,
-                    "Incoming Calls",
+                // High-priority unified phone call notification channel
+                val callChannel = NotificationChannel(
+                    CALL_CHANNEL_ID,
+                    "Phone Calls",
                     NotificationManager.IMPORTANCE_HIGH
                 ).apply {
-                    description = "Alerts and full screen displays for incoming calls"
+                    description = "Persistent notification and heads-up alerts for incoming and ongoing phone calls"
                     setSound(null, null) // System Telecom framework handles the ringtone
                     enableVibration(true)
+                    lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
                 }
 
-                // Channel for Ongoing / Active / Dialing Calls: DEFAULT importance so notification is active and visible
-                val ongoingChannel = NotificationChannel(
-                    ONGOING_CHANNEL_ID,
-                    "Ongoing Calls",
-                    NotificationManager.IMPORTANCE_DEFAULT
-                ).apply {
-                    description = "Status for active, dialing, and in-progress phone calls"
-                    setSound(null, null)
-                    enableVibration(false)
-                }
-
-                nm.createNotificationChannel(incomingChannel)
-                nm.createNotificationChannel(ongoingChannel)
+                nm.createNotificationChannel(callChannel)
             }
         }
     }
@@ -92,6 +82,11 @@ class DialerInCallService : InCallService(), SensorEventListener {
 
         override fun onDetailsChanged(call: Call, details: Call.Details) {
             super.onDetailsChanged(call, details)
+            val name = details.callerDisplayName
+            val num = details.handle?.schemeSpecificPart
+            if (!name.isNullOrBlank() && !num.isNullOrBlank()) {
+                com.amitbharat.phonedialer.repository.CallerIdResolver.cacheCallerId(applicationContext, num, name)
+            }
             showCallNotification(call)
         }
     }
@@ -136,8 +131,19 @@ class DialerInCallService : InCallService(), SensorEventListener {
         super.onCallAudioStateChanged(audioState)
         audioState?.let {
             val isMuted = it.isMuted
-            val isSpeaker = it.route == CallAudioState.ROUTE_SPEAKER
-            CallManager.updateAudioState(isMuted, isSpeaker)
+            val route = it.route
+            val supportedRoutes = it.supportedRouteMask
+            val isSpeaker = route == CallAudioState.ROUTE_SPEAKER
+            val isBtConnected = (supportedRoutes and CallAudioState.ROUTE_BLUETOOTH) != 0
+            val isBtActive = route == CallAudioState.ROUTE_BLUETOOTH
+            CallManager.updateAudioState(
+                isMuted = isMuted,
+                isSpeakerOn = isSpeaker,
+                audioRoute = route,
+                supportedRoutes = supportedRoutes,
+                isBluetoothConnected = isBtConnected,
+                isBluetoothActive = isBtActive
+            )
             updateOngoingNotification()
         }
     }
@@ -145,7 +151,25 @@ class DialerInCallService : InCallService(), SensorEventListener {
     override fun onCallAdded(call: Call) {
         super.onCallAdded(call)
         instance = this
+        val initialName = call.details?.callerDisplayName
+        val initialNum = call.details?.handle?.schemeSpecificPart
+        if (!initialName.isNullOrBlank() && !initialNum.isNullOrBlank()) {
+            com.amitbharat.phonedialer.repository.CallerIdResolver.cacheCallerId(applicationContext, initialNum, initialName)
+        }
         CallManager.addCall(call, applicationContext)
+
+        callAudioState?.let { audioState ->
+            val isBtConnected = (audioState.supportedRouteMask and CallAudioState.ROUTE_BLUETOOTH) != 0
+            val isBtActive = audioState.route == CallAudioState.ROUTE_BLUETOOTH
+            CallManager.updateAudioState(
+                isMuted = audioState.isMuted,
+                isSpeakerOn = audioState.route == CallAudioState.ROUTE_SPEAKER,
+                audioRoute = audioState.route,
+                supportedRoutes = audioState.supportedRouteMask,
+                isBluetoothConnected = isBtConnected,
+                isBluetoothActive = isBtActive
+            )
+        }
 
         call.registerCallback(callCallback)
         showCallNotification(call)
@@ -167,17 +191,31 @@ class DialerInCallService : InCallService(), SensorEventListener {
 
     override fun onCallRemoved(call: Call) {
         super.onCallRemoved(call)
+        val endName = call.details?.callerDisplayName
+        val endNum = call.details?.handle?.schemeSpecificPart
+        if (!endName.isNullOrBlank() && !endNum.isNullOrBlank()) {
+            com.amitbharat.phonedialer.repository.CallerIdResolver.cacheCallerId(applicationContext, endNum, endName)
+        }
         call.unregisterCallback(callCallback)
         CallManager.removeCall(call)
 
         if (!CallManager.hasCalls()) {
             unregisterFlipSensor()
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            nm.cancel(NOTIFICATION_ID)
-            if (instance == this) {
-                instance = null
-            }
+            // 800ms debounce to prevent notification vanishing during call handover, reconnection or state settling
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                if (!CallManager.hasCalls()) {
+                    try {
+                        stopForeground(STOP_FOREGROUND_REMOVE)
+                        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+                        nm?.cancel(NOTIFICATION_ID)
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                    if (instance == this) {
+                        instance = null
+                    }
+                }
+            }, 800)
         } else {
             CallManager.primaryCall?.let { showCallNotification(it) }
         }
@@ -293,6 +331,12 @@ class DialerInCallService : InCallService(), SensorEventListener {
 
         val avatarBitmap = loadAvatarBitmap(callerName, CallManager.callState.value.photoUri)
 
+        val callerPerson = androidx.core.app.Person.Builder()
+            .setName(callerName)
+            .setIcon(androidx.core.graphics.drawable.IconCompat.createWithBitmap(avatarBitmap))
+            .setImportant(true)
+            .build()
+
         // Target InCallActivity with flags to bring any existing instance immediately to front
         val activityIntent = Intent(this, InCallActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
@@ -303,8 +347,7 @@ class DialerInCallService : InCallService(), SensorEventListener {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        if (isIncoming) {
-            // Incoming Call Notification (Getting call)
+        val notification = if (isIncoming) {
             val rejectIntent = Intent(this, CallNotificationReceiver::class.java).apply {
                 action = ACTION_REJECT
             }
@@ -327,39 +370,28 @@ class DialerInCallService : InCallService(), SensorEventListener {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
 
-            val notification = NotificationCompat.Builder(this, INCOMING_CHANNEL_ID)
+            val callStyle = NotificationCompat.CallStyle.forIncomingCall(
+                callerPerson,
+                pendingRejectIntent,
+                pendingAnswerIntent
+            )
+
+            NotificationCompat.Builder(this, CALL_CHANNEL_ID)
                 .setSmallIcon(R.drawable.ic_notification_phone_retro)
-                .setLargeIcon(avatarBitmap)
-                .setContentTitle("$callerName • Phone")
+                .setStyle(callStyle)
+                .addPerson(callerPerson)
+                .setContentTitle(callerName)
                 .setContentText("Incoming call via $carrierName")
                 .setOngoing(true)
                 .setAutoCancel(false)
                 .setPriority(NotificationCompat.PRIORITY_MAX)
                 .setCategory(NotificationCompat.CATEGORY_CALL)
                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
                 .setFullScreenIntent(pendingFullScreenIntent, true)
                 .setContentIntent(pendingActivityIntent)
-                .addAction(R.drawable.ic_call_end, "Decline", pendingRejectIntent)
-                .addAction(R.drawable.ic_call, "Answer", pendingAnswerIntent)
                 .build()
-
-            try {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    startForeground(
-                        NOTIFICATION_ID,
-                        notification,
-                        android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL
-                    )
-                } else {
-                    startForeground(NOTIFICATION_ID, notification)
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-                val nm = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
-                nm?.notify(NOTIFICATION_ID, notification)
-            }
         } else {
-            // Outgoing / Active / Ongoing Call Notification (Matches user's screenshot exactly!)
             val hangupIntent = Intent(this, CallNotificationReceiver::class.java).apply {
                 action = ACTION_HANGUP
             }
@@ -400,38 +432,46 @@ class DialerInCallService : InCallService(), SensorEventListener {
             val isSpeakerOn = CallManager.callState.value.isSpeakerOn
             val isMuted = CallManager.callState.value.isMuted
 
-            val notification = NotificationCompat.Builder(this, ONGOING_CHANNEL_ID)
+            val callStyle = NotificationCompat.CallStyle.forOngoingCall(
+                callerPerson,
+                pendingHangupIntent
+            )
+
+            NotificationCompat.Builder(this, CALL_CHANNEL_ID)
                 .setSmallIcon(R.drawable.ic_notification_phone_retro)
-                .setLargeIcon(avatarBitmap)
-                .setContentTitle("$callerName • Phone")
+                .setStyle(callStyle)
+                .addPerson(callerPerson)
+                .setContentTitle(callerName)
                 .setContentText(statusText)
                 .setUsesChronometer(isActive)
                 .setWhen(startTime)
                 .setShowWhen(isActive)
                 .setOngoing(true)
-                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setAutoCancel(false)
+                .setPriority(NotificationCompat.PRIORITY_MAX)
                 .setCategory(NotificationCompat.CATEGORY_CALL)
+                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
                 .setContentIntent(pendingActivityIntent)
-                .addAction(R.drawable.ic_call_end, "Hang up", pendingHangupIntent)
                 .addAction(R.drawable.ic_speaker, if (isSpeakerOn) "Speaker on" else "Speaker", pendingSpeakerIntent)
                 .addAction(R.drawable.ic_mic, if (isMuted) "Muted" else "Mute", pendingMuteIntent)
                 .build()
+        }
 
-            try {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    startForeground(
-                        NOTIFICATION_ID,
-                        notification,
-                        android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL
-                    )
-                } else {
-                    startForeground(NOTIFICATION_ID, notification)
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-                val nm = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
-                nm?.notify(NOTIFICATION_ID, notification)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(
+                    NOTIFICATION_ID,
+                    notification,
+                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL
+                )
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
             }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+            nm?.notify(NOTIFICATION_ID, notification)
         }
     }
 

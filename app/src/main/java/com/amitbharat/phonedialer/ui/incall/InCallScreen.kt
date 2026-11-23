@@ -89,6 +89,10 @@ class InCallActivity : ComponentActivity() {
                 if (!callState.hasCall) {
                     finish()
                 } else if (callState.callState == Call.STATE_DISCONNECTED && !callState.hasSecondaryCall) {
+                    val cName = callState.callerName
+                    if (!cName.isNullOrBlank() && cName != callState.number) {
+                        com.amitbharat.phonedialer.repository.CallerIdResolver.cacheCallerId(this@InCallActivity, callState.number, cName)
+                    }
                     if (callRecorder.isRecording) {
                         val path = callRecorder.stopRecording()
                         if (path != null) {
@@ -141,6 +145,7 @@ class InCallActivity : ComponentActivity() {
                     },
                     onMuteToggle = { CallManager.setMuted(!callState.isMuted) },
                     onSpeakerToggle = { CallManager.setSpeakerphoneOn(!callState.isSpeakerOn) },
+                    onAudioRouteSelected = { route -> CallManager.setAudioRoute(route) },
                     onHoldToggle = { CallManager.toggleHold() },
                     onSwapCalls = { CallManager.swapCalls() },
                     onMergeCalls = { CallManager.mergeCalls() },
@@ -216,6 +221,7 @@ fun InCallScreen(
     onEndCall: () -> Unit,
     onMuteToggle: () -> Unit,
     onSpeakerToggle: () -> Unit,
+    onAudioRouteSelected: (Int) -> Unit = {},
     onHoldToggle: () -> Unit,
     onSwapCalls: () -> Unit,
     onMergeCalls: () -> Unit,
@@ -379,6 +385,33 @@ fun InCallScreen(
                         fontWeight = FontWeight.SemiBold,
                         color = Color.White.copy(alpha = 0.9f)
                     )
+                }
+            }
+
+            if (state.isBluetoothConnected) {
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = if (state.isBluetoothActive) Color(0xFF0369A1).copy(alpha = 0.85f) else Color(0xFF334155).copy(alpha = 0.8f),
+                    modifier = Modifier.padding(bottom = 10.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Default.Bluetooth,
+                            contentDescription = null,
+                            tint = if (state.isBluetoothActive) Color(0xFF38BDF8) else Color.LightGray,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            text = if (state.isBluetoothActive) "Bluetooth Audio Active" else "Bluetooth Connected",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (state.isBluetoothActive) Color(0xFF38BDF8) else Color.LightGray
+                        )
+                    }
                 }
             }
 
@@ -559,12 +592,146 @@ fun InCallScreen(
                                 isActive = state.isMuted,
                                 onClick = onMuteToggle
                             )
+
+                            var showAudioRoutePicker by remember { mutableStateOf(false) }
+                            val audioIcon = when {
+                                state.isBluetoothActive -> Icons.Default.BluetoothAudio
+                                state.isSpeakerOn -> Icons.AutoMirrored.Filled.VolumeUp
+                                else -> Icons.Default.Phone
+                            }
+                            val audioLabel = when {
+                                state.isBluetoothActive -> "Bluetooth"
+                                state.isSpeakerOn -> "Speaker"
+                                else -> "Earpiece"
+                            }
+                            val isAudioActive = state.isBluetoothActive || state.isSpeakerOn
+
                             InCallBtn(
-                                icon = Icons.AutoMirrored.Filled.VolumeUp,
-                                label = "Speaker",
-                                isActive = state.isSpeakerOn,
-                                onClick = onSpeakerToggle
+                                icon = audioIcon,
+                                label = audioLabel,
+                                isActive = isAudioActive,
+                                onClick = {
+                                    if (state.isBluetoothConnected) {
+                                        showAudioRoutePicker = true
+                                    } else {
+                                        onSpeakerToggle()
+                                    }
+                                }
                             )
+
+                            if (showAudioRoutePicker) {
+                                AlertDialog(
+                                    onDismissRequest = { showAudioRoutePicker = false },
+                                    title = {
+                                        Text(
+                                            "Select Audio Output",
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 18.sp,
+                                            color = Color.White
+                                        )
+                                    },
+                                    containerColor = Color(0xFF1E293B),
+                                    text = {
+                                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            // 1. Bluetooth option
+                                            Surface(
+                                                shape = RoundedCornerShape(12.dp),
+                                                color = if (state.isBluetoothActive) Color(0xFF0284C7).copy(alpha = 0.35f) else Color(0xFF334155),
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .clickable {
+                                                        onAudioRouteSelected(android.telecom.CallAudioState.ROUTE_BLUETOOTH)
+                                                        showAudioRoutePicker = false
+                                                    }
+                                            ) {
+                                                Row(
+                                                    modifier = Modifier.padding(14.dp),
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    Icon(Icons.Default.Bluetooth, contentDescription = null, tint = Color(0xFF38BDF8))
+                                                    Spacer(Modifier.width(12.dp))
+                                                    Text(
+                                                        "Bluetooth Headset",
+                                                        fontSize = 15.sp,
+                                                        fontWeight = FontWeight.Medium,
+                                                        color = Color.White,
+                                                        modifier = Modifier.weight(1f)
+                                                    )
+                                                    if (state.isBluetoothActive) {
+                                                        Icon(Icons.Default.Check, contentDescription = null, tint = Color(0xFF38BDF8))
+                                                    }
+                                                }
+                                            }
+
+                                            // 2. Speaker option
+                                            Surface(
+                                                shape = RoundedCornerShape(12.dp),
+                                                color = if (state.isSpeakerOn) Color(0xFF16A34A).copy(alpha = 0.35f) else Color(0xFF334155),
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .clickable {
+                                                        onAudioRouteSelected(android.telecom.CallAudioState.ROUTE_SPEAKER)
+                                                        showAudioRoutePicker = false
+                                                    }
+                                            ) {
+                                                Row(
+                                                    modifier = Modifier.padding(14.dp),
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    Icon(Icons.AutoMirrored.Filled.VolumeUp, contentDescription = null, tint = AccentGreen)
+                                                    Spacer(Modifier.width(12.dp))
+                                                    Text(
+                                                        "Speakerphone",
+                                                        fontSize = 15.sp,
+                                                        fontWeight = FontWeight.Medium,
+                                                        color = Color.White,
+                                                        modifier = Modifier.weight(1f)
+                                                    )
+                                                    if (state.isSpeakerOn) {
+                                                        Icon(Icons.Default.Check, contentDescription = null, tint = AccentGreen)
+                                                    }
+                                                }
+                                            }
+
+                                            // 3. Normal / Earpiece option
+                                            val isEarpieceActive = !state.isBluetoothActive && !state.isSpeakerOn
+                                            Surface(
+                                                shape = RoundedCornerShape(12.dp),
+                                                color = if (isEarpieceActive) Color(0xFF64748B).copy(alpha = 0.35f) else Color(0xFF334155),
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .clickable {
+                                                        onAudioRouteSelected(android.telecom.CallAudioState.ROUTE_EARPIECE)
+                                                        showAudioRoutePicker = false
+                                                    }
+                                            ) {
+                                                Row(
+                                                    modifier = Modifier.padding(14.dp),
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    Icon(Icons.Default.Phone, contentDescription = null, tint = Color.LightGray)
+                                                    Spacer(Modifier.width(12.dp))
+                                                    Text(
+                                                        "Earpiece (Normal Call)",
+                                                        fontSize = 15.sp,
+                                                        fontWeight = FontWeight.Medium,
+                                                        color = Color.White,
+                                                        modifier = Modifier.weight(1f)
+                                                    )
+                                                    if (isEarpieceActive) {
+                                                        Icon(Icons.Default.Check, contentDescription = null, tint = Color.White)
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    },
+                                    confirmButton = {
+                                        TextButton(onClick = { showAudioRoutePicker = false }) {
+                                            Text("Close", color = Color(0xFF94A3B8))
+                                        }
+                                    }
+                                )
+                            }
                             InCallBtn(
                                 icon = Icons.Default.Add,
                                 label = "Add Call",
