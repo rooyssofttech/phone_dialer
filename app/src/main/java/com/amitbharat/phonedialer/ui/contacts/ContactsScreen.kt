@@ -141,8 +141,8 @@ fun ContactsScreen(
                     ) {
                         Text(
                             text = "Contacts (${contacts.size})",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 15.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 14.sp,
                             color = MaterialTheme.colorScheme.primary
                         )
                     }
@@ -371,28 +371,28 @@ fun ContactItemRow(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 10.dp),
+                .padding(horizontal = 12.dp, vertical = 9.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             ContactAvatar(
                 name = contact.name,
                 photoUri = contact.photoUri,
-                size = 46.dp,
-                fontSize = 18.sp
+                size = 42.dp,
+                fontSize = 16.sp
             )
             Spacer(Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = contact.name,
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Medium,
+                    fontSize = 14.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     color = MaterialTheme.colorScheme.onSurface
                 )
                 Text(
                     text = contact.numbers.firstOrNull() ?: "No number",
-                    fontSize = 13.sp,
+                    fontSize = 12.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     color = MaterialTheme.colorScheme.onSurfaceVariant

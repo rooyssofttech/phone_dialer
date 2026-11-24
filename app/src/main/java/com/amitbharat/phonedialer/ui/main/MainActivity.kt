@@ -47,14 +47,21 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
         if (permissions[Manifest.permission.READ_CONTACTS] == true) {
-            lifecycleScope.launch {
+            lifecycleScope.launch(Dispatchers.IO) {
                 contactsRepo.syncDeviceContacts()
                 com.amitbharat.phonedialer.utils.WhatsAppHelper.refreshWhatsAppContacts(this@MainActivity)
             }
         }
         if (permissions[Manifest.permission.READ_CALL_LOG] == true) {
-            lifecycleScope.launch { callLogRepo.syncDeviceCallLogs() }
+            lifecycleScope.launch(Dispatchers.IO) { callLogRepo.syncDeviceCallLogs() }
         }
+        if (permissions[Manifest.permission.READ_SMS] == true) {
+            lifecycleScope.launch(Dispatchers.IO) {
+                com.amitbharat.phonedialer.repository.SmsRepository.getInstance(this@MainActivity)
+                    .loadThreads(contactsRepo.getCachedContacts(), forceRefresh = true)
+            }
+        }
+        autoSyncAllData(force = true)
         checkDefaultDialerRole()
     }
 

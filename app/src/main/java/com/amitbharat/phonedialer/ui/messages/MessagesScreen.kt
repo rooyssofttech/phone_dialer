@@ -328,7 +328,7 @@ fun MessagesScreen(
                                     modifier = Modifier.fillMaxWidth().padding(12.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    ContactAvatar(name = if (hasSavedName) resolvedName!! else thread.displayAddress, size = 48.dp, fontSize = 18.sp)
+                                    ContactAvatar(name = if (hasSavedName) resolvedName!! else thread.displayAddress, size = 42.dp, fontSize = 16.sp)
                                     Spacer(Modifier.width(12.dp))
                                     Column(modifier = Modifier.weight(1f)) {
                                         Row(
@@ -339,8 +339,8 @@ fun MessagesScreen(
                                             Column(modifier = Modifier.weight(1f)) {
                                                 Text(
                                                     text = if (hasSavedName) resolvedName!! else thread.displayAddress,
-                                                    fontWeight = if (thread.unreadCount > 0) FontWeight.Bold else FontWeight.SemiBold,
-                                                    fontSize = 16.sp,
+                                                    fontWeight = if (thread.unreadCount > 0) FontWeight.SemiBold else FontWeight.Medium,
+                                                    fontSize = 14.5.sp,
                                                     maxLines = 1,
                                                     overflow = TextOverflow.Ellipsis,
                                                     color = MaterialTheme.colorScheme.onSurface
@@ -381,8 +381,8 @@ fun MessagesScreen(
                                             }
                                             Text(
                                                 text = thread.latestBody,
-                                                fontSize = 13.sp,
-                                                fontWeight = if (thread.unreadCount > 0) FontWeight.SemiBold else FontWeight.Normal,
+                                                fontSize = 12.5.sp,
+                                                fontWeight = if (thread.unreadCount > 0) FontWeight.Medium else FontWeight.Normal,
                                                 color = if (thread.unreadCount > 0) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
                                                 maxLines = 1,
                                                 overflow = TextOverflow.Ellipsis

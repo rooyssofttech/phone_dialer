@@ -28,11 +28,14 @@ class ContactsRepository(private val context: Context) {
         @Volatile
         private var lastFetchTime: Long = 0L
 
+        private val _contactsFlow = kotlinx.coroutines.flow.MutableStateFlow<List<Contact>>(emptyList())
+
         fun getCachedContacts(): List<Contact> = cachedContacts ?: emptyList()
 
         fun updateCachedContacts(contacts: List<Contact>) {
             cachedContacts = contacts
             lastFetchTime = System.currentTimeMillis()
+            _contactsFlow.value = contacts
         }
 
         private fun encodeNumbers(numbers: List<String>): String = numbers.joinToString(";")
@@ -63,11 +66,10 @@ class ContactsRepository(private val context: Context) {
     fun getCachedContacts(): List<Contact> = cachedContacts ?: emptyList()
 
     private fun deduplicateContacts(contacts: List<Contact>): List<Contact> {
-        val seen = HashSet<String>(contacts.size)
+        val seenIds = HashSet<Long>(contacts.size)
         val result = ArrayList<Contact>(contacts.size)
         for (i in contacts.indices) {
             val c = contacts[i]
-            val normName = c.name.trim().lowercase()
             val validNumbers = c.numbers.filter { num ->
                 var digitCount = 0
                 for (j in 0 until num.length) {
@@ -76,12 +78,15 @@ class ContactsRepository(private val context: Context) {
                 digitCount >= 3
             }.distinct()
             if (validNumbers.isEmpty()) continue
-            val primaryNum = extractDigitsAndPlus(validNumbers.first())
-            val key = if (normName.isNotBlank() && normName != "unknown") normName else primaryNum
-            if (key.isNotBlank() && seen.add(key)) {
+            if (c.id > 0) {
+                if (seenIds.add(c.id)) {
+                    result.add(c.copy(numbers = validNumbers))
+                }
+            } else {
                 result.add(c.copy(numbers = validNumbers))
             }
         }
+        result.sortBy { it.name.lowercase() }
         return result
     }
 
@@ -91,6 +96,9 @@ class ContactsRepository(private val context: Context) {
         if (!cached.isNullOrEmpty()) {
             emit(cached)
             if (!forceRefresh && (now - lastFetchTime < 60_000)) {
+                _contactsFlow.collect { updatedList ->
+                    if (updatedList.isNotEmpty()) emit(updatedList)
+                }
                 return@flow
             }
         } else {
@@ -99,7 +107,7 @@ class ContactsRepository(private val context: Context) {
                 val roomList = contactDao.getAllContactsDirect()
                 if (roomList.isNotEmpty()) {
                     val roomContacts = deduplicateContacts(roomList.map { it.toModel() })
-                    cachedContacts = roomContacts
+                    updateCachedContacts(roomContacts)
                     emit(roomContacts)
                 }
             } catch (ignored: Exception) {}
@@ -107,8 +115,7 @@ class ContactsRepository(private val context: Context) {
 
         // Asynchronously fetch fresh device contacts from content provider
         val deviceContacts = deduplicateContacts(fetchDeviceContactsDirectly(onlyStarred = false))
-        cachedContacts = deviceContacts
-        lastFetchTime = System.currentTimeMillis()
+        updateCachedContacts(deviceContacts)
         emit(deviceContacts)
 
         // Save fresh contacts to Room in background for next instant 0ms launch
@@ -130,6 +137,10 @@ class ContactsRepository(private val context: Context) {
         try {
             com.amitbharat.phonedialer.utils.WhatsAppHelper.refreshWhatsAppContacts(context)
         } catch (e: Exception) {}
+
+        _contactsFlow.collect { updatedList ->
+            if (updatedList.isNotEmpty()) emit(updatedList)
+        }
     }.flowOn(Dispatchers.IO)
 
     fun getFavoriteContacts(): Flow<List<Contact>> = flow {
@@ -202,11 +213,10 @@ class ContactsRepository(private val context: Context) {
             )
 
             cursor?.use {
-                val contactMap = LinkedHashMap<String, MutableList<String>>()
-                val photoMap = HashMap<String, String?>()
-                val starMap = HashMap<String, Boolean>()
-                val idMap = HashMap<String, Long>()
-                val displayNameMap = HashMap<String, String>()
+                val contactMap = LinkedHashMap<Long, MutableList<String>>()
+                val photoMap = HashMap<Long, String?>()
+                val starMap = HashMap<Long, Boolean>()
+                val displayNameMap = HashMap<Long, String>()
 
                 val idIdx = it.getColumnIndex(ContactsContract.CommonDataKinds.Phone.CONTACT_ID)
                 val nameIdx = it.getColumnIndex(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME)
@@ -215,39 +225,40 @@ class ContactsRepository(private val context: Context) {
                 val starIdx = it.getColumnIndex(ContactsContract.CommonDataKinds.Phone.STARRED)
 
                 while (it.moveToNext()) {
+                    val contactId = if (idIdx >= 0) it.getLong(idIdx) else 0L
+                    if (contactId <= 0) continue
+
                     val rawName = if (nameIdx >= 0) it.getString(nameIdx) else null
                     val name = if (!rawName.isNullOrBlank()) rawName.trim() else "Unknown"
-                    val normKey = name.lowercase()
                     val number = if (numIdx >= 0) it.getString(numIdx)?.trim() ?: "" else ""
                     val photo = if (photoIdx >= 0) it.getString(photoIdx) else null
                     val isStarred = if (starIdx >= 0) it.getInt(starIdx) == 1 else false
-                    val contactId = if (idIdx >= 0) it.getLong(idIdx) else 0L
 
                     var digitCount = 0
                     for (k in 0 until number.length) {
                         if (number[k] in '0'..'9') digitCount++
                     }
                     if (number.isNotBlank() && digitCount >= 3) {
-                        contactMap.getOrPut(normKey) { mutableListOf() }.add(number)
-                        displayNameMap[normKey] = name
-                        if (photo != null && photoMap[normKey] == null) photoMap[normKey] = photo
-                        if (isStarred) starMap[normKey] = true
-                        if (idMap[normKey] == null) idMap[normKey] = contactId
+                        contactMap.getOrPut(contactId) { mutableListOf() }.add(number)
+                        displayNameMap[contactId] = name
+                        if (photo != null && photoMap[contactId] == null) photoMap[contactId] = photo
+                        if (isStarred) starMap[contactId] = true
                     }
                 }
 
-                contactMap.forEach { (normKey, numbers) ->
-                    val displayName = displayNameMap[normKey] ?: normKey
+                contactMap.forEach { (cid, numbers) ->
+                    val displayName = displayNameMap[cid] ?: "Unknown"
                     result.add(
                         Contact(
-                            id = idMap[normKey] ?: 0L,
+                            id = cid,
                             name = displayName,
                             numbers = numbers.distinct(),
-                            photoUri = photoMap[normKey],
-                            isFavorite = starMap[normKey] ?: false
+                            photoUri = photoMap[cid],
+                            isFavorite = starMap[cid] ?: false
                         )
                     )
                 }
+                result.sortBy { it.name.lowercase() }
             }
         } catch (e: Exception) {
             e.printStackTrace()
@@ -257,6 +268,7 @@ class ContactsRepository(private val context: Context) {
 
     suspend fun syncDeviceContacts() = withContext(Dispatchers.IO) {
         val contacts = fetchDeviceContactsDirectly()
+        updateCachedContacts(contacts)
         val entities = contacts.map { c ->
             ContactEntity(
                 name = c.name,

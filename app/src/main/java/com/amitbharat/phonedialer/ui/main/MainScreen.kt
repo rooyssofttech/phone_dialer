@@ -208,13 +208,13 @@ fun MainScreen(
                                     MainTab.MESSAGES -> "Messages"
                                     MainTab.FAVORITES -> "Favorites"
                                 },
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 18.sp
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 16.sp
                             )
                             Spacer(Modifier.width(8.dp))
                             Text(
                                 text = "by Amit Bharat",
-                                fontSize = 12.sp,
+                                fontSize = 11.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
@@ -275,8 +275,8 @@ fun MainScreen(
                             label = {
                                 Text(
                                     "Dialer",
-                                    fontSize = 12.sp,
-                                    fontWeight = if (currentTab == MainTab.DIALER) FontWeight.Bold else FontWeight.Normal
+                                    fontSize = 11.sp,
+                                    fontWeight = if (currentTab == MainTab.DIALER) FontWeight.SemiBold else FontWeight.Normal
                                 )
                             },
                             colors = navItemColors
@@ -294,8 +294,8 @@ fun MainScreen(
                             label = {
                                 Text(
                                     "Contacts",
-                                    fontSize = 12.sp,
-                                    fontWeight = if (currentTab == MainTab.CONTACTS) FontWeight.Bold else FontWeight.Normal
+                                    fontSize = 11.sp,
+                                    fontWeight = if (currentTab == MainTab.CONTACTS) FontWeight.SemiBold else FontWeight.Normal
                                 )
                             },
                             colors = navItemColors
@@ -313,8 +313,8 @@ fun MainScreen(
                             label = {
                                 Text(
                                     "Messages",
-                                    fontSize = 12.sp,
-                                    fontWeight = if (currentTab == MainTab.MESSAGES) FontWeight.Bold else FontWeight.Normal
+                                    fontSize = 11.sp,
+                                    fontWeight = if (currentTab == MainTab.MESSAGES) FontWeight.SemiBold else FontWeight.Normal
                                 )
                             },
                             colors = navItemColors
@@ -332,8 +332,8 @@ fun MainScreen(
                             label = {
                                 Text(
                                     "Favorites",
-                                    fontSize = 12.sp,
-                                    fontWeight = if (currentTab == MainTab.FAVORITES) FontWeight.Bold else FontWeight.Normal
+                                    fontSize = 11.sp,
+                                    fontWeight = if (currentTab == MainTab.FAVORITES) FontWeight.SemiBold else FontWeight.Normal
                                 )
                             },
                             colors = navItemColors

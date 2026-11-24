@@ -220,6 +220,9 @@ object CallerIdResolver {
             }
         } catch (ignored: Exception) {}
 
+        for (k in keys) {
+            callerIdCache[k] = ""
+        }
         return null
     }
 

@@ -61,7 +61,14 @@ class SmsRepository(private val context: Context) {
         }
 
         // Check in-memory cache before hitting content resolver
-        phoneLookupCache[address]?.let { return it }
+        phoneLookupCache[address]?.let { return it.ifBlank { null } }
+
+        // Non-phone sender IDs (alphanumeric like VM-HDFCBK) won't be in PhoneLookup
+        val digitsOnly = address.replace(Regex("[^0-9]"), "")
+        if (digitsOnly.length < 7) {
+            phoneLookupCache[address] = ""
+            return null
+        }
 
         // Direct PhoneLookup query to Android Contacts Provider
         try {
@@ -90,6 +97,7 @@ class SmsRepository(private val context: Context) {
         } catch (e: Exception) {
             // Ignored
         }
+        phoneLookupCache[address] = ""
         return null
     }
 

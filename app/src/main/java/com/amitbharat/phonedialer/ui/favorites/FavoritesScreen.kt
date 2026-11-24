@@ -110,18 +110,18 @@ fun FavoritesScreen(
                                 .padding(horizontal = 12.dp, vertical = 10.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            ContactAvatar(name = contact.name, photoUri = contact.photoUri, size = 52.dp, fontSize = 20.sp)
+                            ContactAvatar(name = contact.name, photoUri = contact.photoUri, size = 42.dp, fontSize = 16.sp)
                             Spacer(Modifier.width(14.dp))
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
                                     text = contact.name,
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    fontSize = 14.sp,
                                     color = MaterialTheme.colorScheme.onSurface
                                 )
                                 Text(
                                     text = num,
-                                    fontSize = 13.sp,
+                                    fontSize = 12.sp,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }

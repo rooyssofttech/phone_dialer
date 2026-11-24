@@ -35,6 +35,8 @@ private val avatarColors = listOf(
     Pair(Color(0xFF06B6D4), Color(0xFF0E7490))
 )
 
+private val avatarBitmapCache = object : android.util.LruCache<String, android.graphics.Bitmap>(80) {}
+
 @Composable
 fun ContactAvatar(
     name: String,
@@ -45,21 +47,29 @@ fun ContactAvatar(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    var bitmap by remember(photoUri) { mutableStateOf<android.graphics.Bitmap?>(null) }
+    val cachedBitmap = if (!photoUri.isNullOrBlank()) avatarBitmapCache.get(photoUri) else null
+    var bitmap by remember(photoUri) { mutableStateOf(cachedBitmap) }
 
     LaunchedEffect(photoUri) {
-        if (!photoUri.isNullOrBlank()) {
+        if (!photoUri.isNullOrBlank() && bitmap == null) {
             withContext(Dispatchers.IO) {
                 try {
                     val stream = context.contentResolver.openInputStream(Uri.parse(photoUri))
                     stream?.use {
-                        bitmap = BitmapFactory.decodeStream(it)
+                        val options = BitmapFactory.Options().apply {
+                            inSampleSize = 2 // downsample thumbnail for instant smooth scroll
+                        }
+                        val decoded = BitmapFactory.decodeStream(it, null, options)
+                        if (decoded != null) {
+                            avatarBitmapCache.put(photoUri, decoded)
+                            bitmap = decoded
+                        }
                     }
                 } catch (e: Exception) {
                     bitmap = null
                 }
             }
-        } else {
+        } else if (photoUri.isNullOrBlank()) {
             bitmap = null
         }
     }

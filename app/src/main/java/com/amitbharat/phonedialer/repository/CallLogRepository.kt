@@ -95,26 +95,25 @@ class CallLogRepository(private val context: Context) {
                 _callLogsFlow.collect { updatedList ->
                     if (updatedList.isNotEmpty()) emit(updatedList)
                 }
+                return@flow
             }
         } else {
-            // Stage 1: Ultra-fast fetch of top 40 call logs (0ms perceived startup!)
+            // Stage 1: Ultra-fast fetch of top 100 call logs (0ms perceived startup!)
             try {
-                val fastLogs = deduplicateLogs(fetchDeviceCallLogsDirectly(daysLimit = null, maxCount = 40, skipRecordings = true))
+                val fastLogs = deduplicateLogs(fetchDeviceCallLogsDirectly(daysLimit = null, maxCount = 100, skipRecordings = true))
                 if (fastLogs.isNotEmpty()) {
-                    cachedCallLogs = fastLogs
-                    lastLogFetchTime = now
-                    _callLogsFlow.value = fastLogs
+                    updateCachedCallLogs(fastLogs)
                     emit(fastLogs)
                 }
             } catch (ignored: Exception) {}
         }
 
-        // Stage 2: Query full call logs up to current days limit in background
-        val recentLogs = deduplicateLogs(fetchDeviceCallLogsDirectly(daysLimit = currentDaysLimit, skipRecordings = true))
-        cachedCallLogs = recentLogs
-        lastLogFetchTime = System.currentTimeMillis()
-        _callLogsFlow.value = recentLogs
-        emit(recentLogs)
+        // Stage 2: Query full recent call logs in background
+        val recentLogs = deduplicateLogs(fetchDeviceCallLogsDirectly(daysLimit = null, maxCount = 500, skipRecordings = false))
+        if (recentLogs.isNotEmpty()) {
+            updateCachedCallLogs(recentLogs)
+            emit(recentLogs)
+        }
 
         _callLogsFlow.collect { updatedList ->
             if (updatedList.isNotEmpty()) {
@@ -123,12 +122,11 @@ class CallLogRepository(private val context: Context) {
         }
     }.flowOn(Dispatchers.IO)
 
-    suspend fun loadMoreCallLogs(batchDays: Int = 15): List<CallLogItem> = withContext(Dispatchers.IO) {
-        currentDaysLimit += batchDays
-        val updated = deduplicateLogs(fetchDeviceCallLogsDirectly(daysLimit = currentDaysLimit))
-        cachedCallLogs = updated
-        lastLogFetchTime = System.currentTimeMillis()
-        _callLogsFlow.value = updated
+    suspend fun loadMoreCallLogs(batchCount: Int = 100): List<CallLogItem> = withContext(Dispatchers.IO) {
+        val updated = deduplicateLogs(fetchDeviceCallLogsDirectly(daysLimit = null, maxCount = (cachedCallLogs?.size ?: 100) + batchCount))
+        if (updated.isNotEmpty()) {
+            updateCachedCallLogs(updated)
+        }
         updated
     }
 
@@ -155,7 +153,7 @@ class CallLogRepository(private val context: Context) {
     }
 
     fun fetchDeviceCallLogsDirectly(
-        daysLimit: Int? = currentDaysLimit,
+        daysLimit: Int? = null,
         maxCount: Int? = null,
         skipRecordings: Boolean = false
     ): List<CallLogItem> {
@@ -483,6 +481,10 @@ class CallLogRepository(private val context: Context) {
     }
 
     suspend fun syncDeviceCallLogs() = withContext(Dispatchers.IO) {
+        val freshLogs = deduplicateLogs(fetchDeviceCallLogsDirectly(daysLimit = null, skipRecordings = false))
+        if (freshLogs.isNotEmpty()) {
+            updateCachedCallLogs(freshLogs)
+        }
         callLogDao.clearUnrecordedCallLogs()
     }
 

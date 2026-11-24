@@ -193,12 +193,12 @@ fun ContactDetailsScreen(
                             .padding(20.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        ContactAvatar(name = name, photoUri = photoUri, size = 80.dp, fontSize = 30.sp)
+                        ContactAvatar(name = name, photoUri = photoUri, size = 72.dp, fontSize = 26.sp)
                         Spacer(Modifier.height(12.dp))
                         Text(
                             text = name,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 22.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 18.sp,
                             color = MaterialTheme.colorScheme.onSurface,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
@@ -206,7 +206,7 @@ fun ContactDetailsScreen(
                         Spacer(Modifier.height(4.dp))
                         Text(
                             text = number,
-                            fontSize = 15.sp,
+                            fontSize = 13.5.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
 

@@ -372,7 +372,6 @@ fun DialerScreen(
 
                 val bestName = matchedContact?.name
                     ?: sortedItems.firstOrNull { !it.name.isNullOrBlank() }?.name
-                    ?: com.amitbharat.phonedialer.repository.CallerIdResolver.lookupTruecaller(context, cleanNum, last10)
                     ?: first.name
 
                 consolidatedList.add(
@@ -537,11 +536,11 @@ fun DialerScreen(
                                         modifier = Modifier.padding(12.dp),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        ContactAvatar(name = contact.name, photoUri = contact.photoUri, size = 44.dp, fontSize = 16.sp)
+                                        ContactAvatar(name = contact.name, photoUri = contact.photoUri, size = 40.dp, fontSize = 15.sp)
                                         Spacer(Modifier.width(12.dp))
                                         Column(modifier = Modifier.weight(1f)) {
-                                            Text(contact.name, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = MaterialTheme.colorScheme.onSurface)
-                                            Text(contact.numbers.firstOrNull() ?: "", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                            Text(contact.name, fontWeight = FontWeight.Medium, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurface)
+                                            Text(contact.numbers.firstOrNull() ?: "", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                         }
                                         IconButton(
                                             onClick = { onCallClick(contact.numbers.firstOrNull() ?: enteredNumber, -1) },
@@ -654,8 +653,8 @@ fun DialerScreen(
                                     ) {
                                         Text(
                                             text = dayHeader,
-                                            fontWeight = FontWeight.Bold,
-                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            fontSize = 13.sp,
                                             color = MaterialTheme.colorScheme.primary
                                         )
                                     }
@@ -703,16 +702,16 @@ fun DialerScreen(
                                             ContactAvatar(
                                                 name = group.name ?: group.number,
                                                 photoUri = allContacts.find { it.name == group.name }?.photoUri,
-                                                size = 48.dp,
-                                                fontSize = 18.sp
+                                                size = 42.dp,
+                                                fontSize = 16.sp
                                             )
                                             Spacer(Modifier.width(12.dp))
                                             Column(modifier = Modifier.weight(1f)) {
                                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                                     Text(
                                                         text = group.name ?: group.number,
-                                                        fontWeight = FontWeight.Bold,
-                                                        fontSize = 16.sp,
+                                                        fontWeight = FontWeight.Medium,
+                                                        fontSize = 14.sp,
                                                         maxLines = 1,
                                                         overflow = TextOverflow.Ellipsis,
                                                         color = if (group.callType == CallType.MISSED || group.callType == CallType.REJECTED) AccentRed else MaterialTheme.colorScheme.onSurface
@@ -725,8 +724,8 @@ fun DialerScreen(
                                                         ) {
                                                             Text(
                                                                 text = "(${group.count})",
-                                                                fontSize = 12.sp,
-                                                                fontWeight = FontWeight.Bold,
+                                                                fontSize = 11.sp,
+                                                                fontWeight = FontWeight.SemiBold,
                                                                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp),
                                                                 color = if (group.callType == CallType.MISSED || group.callType == CallType.REJECTED) AccentRed else MaterialTheme.colorScheme.primary
                                                             )
@@ -742,7 +741,7 @@ fun DialerScreen(
                                                             Text(
                                                                 text = "Unsaved",
                                                                 fontSize = 10.sp,
-                                                                fontWeight = FontWeight.Bold,
+                                                                fontWeight = FontWeight.Medium,
                                                                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
                                                                 color = Color(0xFFF59E0B)
                                                             )
@@ -751,11 +750,11 @@ fun DialerScreen(
                                                 }
                                                 Spacer(Modifier.height(2.dp))
                                                 Row(verticalAlignment = Alignment.CenterVertically) {
-                                                    Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(14.dp))
+                                                    Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(13.dp))
                                                     Spacer(Modifier.width(4.dp))
                                                     Text(
                                                         text = "$typeLabel • $formattedTime",
-                                                        fontSize = 12.sp,
+                                                        fontSize = 11.5.sp,
                                                         maxLines = 1,
                                                         overflow = TextOverflow.Ellipsis,
                                                         color = tint
@@ -1452,8 +1451,8 @@ fun DialKeyModern(
         ) {
             Text(
                 text = digit,
-                fontSize = 28.sp,
-                fontWeight = FontWeight.Bold,
+                fontSize = 24.sp,
+                fontWeight = FontWeight.Medium,
                 color = MaterialTheme.colorScheme.onSurface
             )
         }
